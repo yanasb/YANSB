@@ -1,34 +1,113 @@
-# Palm Deposit System
+# Palm Treasure — Production USDT Deposit Backend
 
-نظام Backend + صفحة بسيطة لتعبئة رصيد USDT وربطها بـ NOWPayments.
+هذا المشروع مسؤول عن معالجة تعبئة USDT باستخدام NOWPayments.
 
-## مهم قبل التشغيل الحقيقي
-- لا تضع API Key أو IPN Secret في الواجهة.
-- هذا المشروع يستخدم SQLite للتجربة/البداية؛ للإنتاج يمكن نقله إلى PostgreSQL.
-- وضع `DEPOSIT_ADDRESS_MODE=permanent` يفترض أن حساب NOWPayments لديه ميزة Permanent Deposit Addresses/partner أو Casino API مفعلة. NOWPayments يصف هذه الميزة كحل لشركاء iGaming، بينما الدفع العادي يولد عناوين ديناميكية.
-- لا تعتمد على إدخال المستخدم لتأكيد الدفع. الرصيد لا يُضاف إلا من IPN موقع ومتحقق منه، وبحماية idempotency عبر TX hash/credited_amount.
+## Architecture
 
-## التشغيل
-```bash
-cd api
-cp .env.example .env
-npm install
-# ضع المفاتيح في .env
-npm start
-```
-ثم افتح `web/index.html` عبر سيرفر الواجهة، واضبط `BASE_URL` ليكون رابط الـBackend العام.
+Frontend
+↓
+Authenticated JWT
+↓
+Backend API
+↓
+NOWPayments
+↓
+Blockchain
+↓
+NOWPayments IPN
+↓
+IPN signature verification
+↓
+Payment verification
+↓
+Atomic PostgreSQL transaction
+↓
+User balance
+↓
+Transaction record
+↓
+Deposit history
 
-## NOWPayments
-1. ضع API Key في `NOWPAYMENTS_API_KEY`.
-2. ضع IPN Secret في `NOWPAYMENTS_IPN_SECRET`.
-3. اجعل `BASE_URL` رابط HTTPS عام للـBackend.
-4. استخدم `/api/webhooks/nowpayments` كـ IPN callback.
-5. اختبر أولًا في sandbox/بيئة اختبار قبل الأموال الحقيقية.
+## Security
 
-## API
-- `GET /api/health`
-- `GET /api/users/:userId/deposit-address?currency=usdttrc20`
-- `POST /api/deposits` body: `{userId,currency,amount}`
-- `POST /api/webhooks/nowpayments`
-- `GET /api/users/:userId/balance`
-- `GET /api/users/:userId/deposits`
+الرصيد لا يتم تعديله من Frontend.
+
+لا توجد أي API تسمح للواجهة بإرسال:
+
+- addBalance
+- confirmPayment
+- trusted balance
+- trusted txHash
+
+لتعديل الرصيد.
+
+الرصيد تتم إضافته فقط من Backend بعد:
+
+1. IPN signature verification
+2. payment_id verification
+3. user/deposit matching
+4. currency verification
+5. network verification
+6. destination address verification
+7. payment status verification
+8. positive actually_paid
+9. duplicate payment prevention
+10. transaction hash uniqueness
+11. PostgreSQL transaction
+
+## Deposit statuses
+
+يستخدم النظام الحالات التالية فقط:
+
+- waiting
+- confirming
+- finished
+- failed
+- expired
+
+NOWPayments قد ترسل حالات إضافية مثل:
+
+- confirmed
+- sending
+- partially_paid
+- refunded
+
+ويتم تحويلها داخليًا إلى الحالات المناسبة.
+
+لا يتم إضافة الرصيد إلا عند:
+
+`payment_status = finished`
+
+## Permanent Deposit Addresses
+
+المشروع لا ينشئ عناوين Blockchain محليًا.
+
+المشروع لا يخترع عناوين.
+
+المشروع لا يستخدم عنوانًا واحدًا لكل المستخدمين.
+
+المشروع لا يعتبر عنوان NOWPayments العادي عنوانًا دائمًا تلقائيًا.
+
+يجب أن تكون ميزة Permanent Deposit Addresses مؤكدة ومفعلة من NOWPayments لحساب التاجر.
+
+إذا لم تكن الميزة مفعلة، فإن API يعيد:
+
+`503`
+
+مع رسالة واضحة.
+
+لا يتم إنشاء عنوان مزيف.
+
+## Environment Variables
+
+يجب وضع Secrets في Render Environment Variables فقط.
+
+المتغيرات:
+
+```text
+NOWPAYMENTS_API_KEY
+NOWPAYMENTS_IPN_SECRET
+NOWPAYMENTS_IPN_CALLBACK_URL
+BASE_URL
+JWT_SECRET
+DATABASE_URL
