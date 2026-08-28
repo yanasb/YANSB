@@ -169,7 +169,62 @@
 
 <body>
 
-<div class="box">
+<div class="box" id="authBox">
+
+  <h2>🔐 تسجيل الدخول</h2>
+
+  <div id="authTabs">
+    <button id="tabLoginBtn" onclick="showAuthTab('login')">
+      دخول
+    </button>
+
+    <button
+      class="secondary"
+      id="tabRegisterBtn"
+      onclick="showAuthTab('register')"
+    >
+      حساب جديد
+    </button>
+  </div>
+
+  <div id="loginForm">
+    <label for="loginUsername">اسم المستخدم</label>
+    <input id="loginUsername" type="text" autocomplete="username">
+
+    <label for="loginPassword">كلمة المرور</label>
+    <input id="loginPassword" type="password" autocomplete="current-password">
+
+    <button onclick="login()">دخول</button>
+  </div>
+
+  <div id="registerForm" class="hidden">
+    <label for="registerUsername">اسم المستخدم (أحرف إنجليزية وأرقام فقط)</label>
+    <input id="registerUsername" type="text" autocomplete="username">
+
+    <label for="registerEmail">البريد الإلكتروني (اختياري)</label>
+    <input id="registerEmail" type="email" autocomplete="email">
+
+    <label for="registerPassword">كلمة المرور (8 أحرف على الأقل)</label>
+    <input id="registerPassword" type="password" autocomplete="new-password">
+
+    <button onclick="register()">إنشاء حساب</button>
+  </div>
+
+  <div id="authMessage" class="status hidden"></div>
+
+</div>
+
+<div class="box hidden" id="appBox">
+
+  <div class="card">
+    مسجّل الدخول باسم:
+    <b id="whoAmI"></b>
+    &nbsp;|&nbsp;
+    الرصيد:
+    <b id="myBalance">-</b>
+    USDT
+    <button class="secondary" onclick="logout()">تسجيل الخروج</button>
+  </div>
 
   <h2>💳 تعبئة رصيد USDT</h2>
 
@@ -247,11 +302,9 @@
 
 <script>
   /*
-    IMPORTANT:
-    The existing Palm Treasure login must provide the real JWT.
-
-    Example:
-      localStorage.setItem('palmJwt', YOUR_EXISTING_JWT);
+    JWT is issued by the backend itself via
+    POST /api/auth/register or POST /api/auth/login,
+    then stored here for subsequent requests.
 
     Do not put JWT_SECRET or NOWPAYMENTS secrets here.
   */
@@ -262,6 +315,217 @@
     return localStorage.getItem(
       'palmJwt'
     ) || '';
+  }
+
+  function setJwt(token) {
+    localStorage.setItem(
+      'palmJwt',
+      token
+    );
+  }
+
+  function clearJwt() {
+    localStorage.removeItem(
+      'palmJwt'
+    );
+  }
+
+  function showAuthTab(tab) {
+    const loginForm =
+      document.getElementById(
+        'loginForm'
+      );
+
+    const registerForm =
+      document.getElementById(
+        'registerForm'
+      );
+
+    const tabLoginBtn =
+      document.getElementById(
+        'tabLoginBtn'
+      );
+
+    const tabRegisterBtn =
+      document.getElementById(
+        'tabRegisterBtn'
+      );
+
+    if (tab === 'register') {
+      loginForm.classList.add('hidden');
+      registerForm.classList.remove('hidden');
+      tabLoginBtn.className = 'secondary';
+      tabRegisterBtn.className = '';
+    } else {
+      registerForm.classList.add('hidden');
+      loginForm.classList.remove('hidden');
+      tabRegisterBtn.className = 'secondary';
+      tabLoginBtn.className = '';
+    }
+  }
+
+  function showAuthMessage(text, bad = false) {
+    const el =
+      document.getElementById(
+        'authMessage'
+      );
+
+    el.textContent = text;
+
+    el.classList.remove('hidden');
+
+    el.className =
+      'status ' +
+      (bad ? 'bad' : 'ok');
+  }
+
+  async function authApi(path, body) {
+    const response =
+      await fetch(
+        API + path,
+        {
+          method: 'POST',
+
+          headers: {
+            'Content-Type':
+              'application/json'
+          },
+
+          body:
+            JSON.stringify(body)
+        }
+      );
+
+    let data = {};
+
+    try {
+      data =
+        await response.json();
+    } catch {}
+
+    if (!response.ok) {
+      throw new Error(
+        data.error ||
+        'حدث خطأ في الخادم.'
+      );
+    }
+
+    return data;
+  }
+
+  async function register() {
+    try {
+      const username =
+        document.getElementById(
+          'registerUsername'
+        ).value;
+
+      const email =
+        document.getElementById(
+          'registerEmail'
+        ).value;
+
+      const password =
+        document.getElementById(
+          'registerPassword'
+        ).value;
+
+      const result =
+        await authApi(
+          '/api/auth/register',
+          { username, email, password }
+        );
+
+      setJwt(result.token);
+
+      onLoggedIn(result.user);
+
+    } catch (error) {
+      showAuthMessage(
+        error.message,
+        true
+      );
+    }
+  }
+
+  async function login() {
+    try {
+      const username =
+        document.getElementById(
+          'loginUsername'
+        ).value;
+
+      const password =
+        document.getElementById(
+          'loginPassword'
+        ).value;
+
+      const result =
+        await authApi(
+          '/api/auth/login',
+          { username, password }
+        );
+
+      setJwt(result.token);
+
+      onLoggedIn(result.user);
+
+    } catch (error) {
+      showAuthMessage(
+        error.message,
+        true
+      );
+    }
+  }
+
+  function logout() {
+    clearJwt();
+
+    document.getElementById(
+      'appBox'
+    ).classList.add('hidden');
+
+    document.getElementById(
+      'authBox'
+    ).classList.remove('hidden');
+  }
+
+  function onLoggedIn(user) {
+    document.getElementById(
+      'whoAmI'
+    ).textContent =
+      user.username;
+
+    document.getElementById(
+      'myBalance'
+    ).textContent =
+      user.balance;
+
+    document.getElementById(
+      'authBox'
+    ).classList.add('hidden');
+
+    document.getElementById(
+      'appBox'
+    ).classList.remove('hidden');
+
+    loadNetworks();
+    loadHistory();
+  }
+
+  async function tryResumeSession() {
+    if (!getJwt()) {
+      return;
+    }
+
+    try {
+      const user =
+        await api('/api/auth/me');
+
+      onLoggedIn(user);
+    } catch {
+      clearJwt();
+    }
   }
 
   function authHeaders() {
@@ -436,7 +700,7 @@
 
       if (!getJwt()) {
         showMessage(
-          'يجب ربط الصفحة بتسجيل الدخول الحالي وإرسال JWT المستخدم.',
+          'انتهت الجلسة، يرجى تسجيل الدخول من جديد.',
           true
         );
 
@@ -699,7 +963,7 @@
 
       if (!getJwt()) {
         showMessage(
-          'لم يتم العثور على جلسة المستخدم.',
+          'انتهت الجلسة، يرجى تسجيل الدخول من جديد.',
           true
         );
 
@@ -912,8 +1176,7 @@
       );
   }
 
-  loadNetworks();
-  loadHistory();
+  tryResumeSession();
 </script>
 
 </body>
