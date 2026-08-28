@@ -4,6 +4,7 @@ import express from 'express';
 import helmet from 'helmet';
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
 import QRCode from 'qrcode';
 import pg from 'pg';
 
@@ -209,6 +210,33 @@ async function initializeDatabase() {
       balance NUMERIC(30, 8) NOT NULL DEFAULT 0,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+  `);
+
+  /*
+    Authentication columns.
+
+    Added with ALTER TABLE ... ADD COLUMN IF NOT EXISTS so this
+    is safe to run against a database that was already created
+    by an earlier version of this project (deposits-only).
+  */
+
+  await pool.query(`
+    ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS username TEXT,
+      ADD COLUMN IF NOT EXISTS password_hash TEXT,
+      ADD COLUMN IF NOT EXISTS email TEXT;
+  `);
+
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_users_username
+    ON users(username)
+    WHERE username IS NOT NULL;
+  `);
+
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_users_email
+    ON users(email)
+    WHERE email IS NOT NULL;
   `);
 
   await pool.query(`
@@ -538,6 +566,304 @@ async function ensureUser(client, userId) {
     [userId]
   );
 }
+
+/* =========================================================
+   AUTH: REGISTER / LOGIN
+========================================================= */
+
+const JWT_EXPIRES_IN = '30d';
+
+const USERNAME_PATTERN = /^[a-z0-9_]{3,32}$/;
+
+function normalizeUsername(value) {
+  const username =
+    String(value || '')
+      .trim()
+      .toLowerCase();
+
+  if (!USERNAME_PATTERN.test(username)) {
+    throw new Error(
+      'Username must be 3-32 characters and contain only lowercase letters, numbers, and underscores.'
+    );
+  }
+
+  return username;
+}
+
+function normalizeEmail(value) {
+  const email =
+    String(value || '')
+      .trim()
+      .toLowerCase();
+
+  if (!email) {
+    return null;
+  }
+
+  if (
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(
+      email
+    )
+  ) {
+    throw new Error(
+      'Invalid email address.'
+    );
+  }
+
+  return email;
+}
+
+function validatePassword(value) {
+  const password =
+    String(value || '');
+
+  if (password.length < 8) {
+    throw new Error(
+      'Password must be at least 8 characters.'
+    );
+  }
+
+  if (password.length > 200) {
+    throw new Error(
+      'Password is too long.'
+    );
+  }
+
+  return password;
+}
+
+function issueToken(userId) {
+  if (!JWT_SECRET) {
+    throw new Error(
+      'JWT_SECRET is not configured.'
+    );
+  }
+
+  return jwt.sign(
+    {
+      userId,
+      sub: userId
+    },
+    JWT_SECRET,
+    {
+      expiresIn:
+        JWT_EXPIRES_IN
+    }
+  );
+}
+
+app.post(
+  '/api/auth/register',
+  async (req, res) => {
+    try {
+      const username =
+        normalizeUsername(
+          req.body?.username
+        );
+
+      const email =
+        normalizeEmail(
+          req.body?.email
+        );
+
+      const password =
+        validatePassword(
+          req.body?.password
+        );
+
+      const passwordHash =
+        await bcrypt.hash(
+          password,
+          12
+        );
+
+      const userId =
+        crypto.randomUUID();
+
+      try {
+        await pool.query(
+          `
+            INSERT INTO users(
+              id,
+              username,
+              password_hash,
+              email
+            )
+            VALUES(
+              $1,
+              $2,
+              $3,
+              $4
+            )
+          `,
+          [
+            userId,
+            username,
+            passwordHash,
+            email
+          ]
+        );
+      } catch (error) {
+        if (
+          error.code ===
+          '23505'
+        ) {
+          return res
+            .status(409)
+            .json({
+              error:
+                'Username or email is already registered.'
+            });
+        }
+
+        throw error;
+      }
+
+      const token =
+        issueToken(userId);
+
+      res.status(201).json({
+        token,
+        user: {
+          id: userId,
+          username,
+          email,
+          balance: 0
+        }
+      });
+    } catch (error) {
+      res.status(400).json({
+        error:
+          error.message
+      });
+    }
+  }
+);
+
+app.post(
+  '/api/auth/login',
+  async (req, res) => {
+    try {
+      const username =
+        normalizeUsername(
+          req.body?.username
+        );
+
+      const password =
+        String(
+          req.body?.password || ''
+        );
+
+      if (!password) {
+        throw new Error(
+          'Password is required.'
+        );
+      }
+
+      const result =
+        await pool.query(
+          `
+            SELECT
+              id,
+              username,
+              email,
+              balance,
+              password_hash
+            FROM users
+            WHERE username = $1
+            LIMIT 1
+          `,
+          [username]
+        );
+
+      const row =
+        result.rows[0];
+
+      const passwordMatches =
+        row?.password_hash
+          ? await bcrypt.compare(
+              password,
+              row.password_hash
+            )
+          : false;
+
+      if (
+        !row ||
+        !passwordMatches
+      ) {
+        return res
+          .status(401)
+          .json({
+            error:
+              'Invalid username or password.'
+          });
+      }
+
+      const token =
+        issueToken(row.id);
+
+      res.json({
+        token,
+        user: {
+          id: row.id,
+          username:
+            row.username,
+          email: row.email,
+          balance:
+            row.balance
+        }
+      });
+    } catch (error) {
+      res.status(400).json({
+        error:
+          error.message
+      });
+    }
+  }
+);
+
+app.get(
+  '/api/auth/me',
+  async (req, res) => {
+    try {
+      const userId =
+        authenticate(req);
+
+      const result =
+        await pool.query(
+          `
+            SELECT
+              id,
+              username,
+              email,
+              balance
+            FROM users
+            WHERE id = $1
+            LIMIT 1
+          `,
+          [userId]
+        );
+
+      if (!result.rows[0]) {
+        return res
+          .status(404)
+          .json({
+            error:
+              'User not found.'
+          });
+      }
+
+      res.json(
+        result.rows[0]
+      );
+    } catch (error) {
+      res.status(401).json({
+        error:
+          error.message
+      });
+    }
+  }
+);
 
 /* =========================================================
    IPN SIGNATURE
@@ -1444,10 +1770,70 @@ app.get(
 ========================================================= */
 
 async function processIpn(
-  payload
+  ipnPayload
 ) {
-  const paymentId =
-    getPaymentId(payload);
+  const ipnPaymentId =
+    getPaymentId(ipnPayload);
+
+  if (!ipnPaymentId) {
+    throw new Error(
+      'IPN payment_id is missing.'
+    );
+  }
+
+  /*
+    CRITICAL:
+
+    We never act on the raw IPN body alone.
+
+    After signature verification, we re-fetch the payment
+    directly from the NOWPayments API using the payment ID
+    and use ONLY that verified response for all further
+    decisions (status, amounts, currency, network, address,
+    tx hash).
+
+    The original IPN body is kept purely for audit purposes
+    inside raw_json.
+  */
+
+  let verifiedPayment;
+
+  try {
+    verifiedPayment =
+      await nowPaymentsRequest(
+        `/v1/payment/${encodeURIComponent(ipnPaymentId)}`
+      );
+  } catch (error) {
+    throw new Error(
+      `Unable to verify payment with NOWPayments API: ${error.message}`
+    );
+  }
+
+  const verifiedPaymentId =
+    getPaymentId(verifiedPayment);
+
+  if (
+    !verifiedPaymentId ||
+    verifiedPaymentId !== ipnPaymentId
+  ) {
+    throw new Error(
+      'NOWPayments payment verification failed: payment ID mismatch.'
+    );
+  }
+
+  /*
+    From this point on, `payload` refers to the VERIFIED
+    NOWPayments API response, not the incoming IPN body.
+  */
+
+  const payload = verifiedPayment;
+
+  const auditPayload = {
+    ipn: ipnPayload,
+    verified: verifiedPayment
+  };
+
+  const paymentId = verifiedPaymentId;
 
   const txHash =
     getTxHash(payload);
@@ -1466,12 +1852,6 @@ async function processIpn(
     normalizeStatus(
       rawStatus
     );
-
-  if (!paymentId) {
-    throw new Error(
-      'IPN payment_id is missing.'
-    );
-  }
 
   if (!internalStatus) {
     throw new Error(
@@ -1602,7 +1982,7 @@ async function processIpn(
       `,
       [
         JSON.stringify({
-          ...payload,
+          ...auditPayload,
           rejection:
             'currency_mismatch'
         }),
@@ -1634,7 +2014,7 @@ async function processIpn(
       `,
       [
         JSON.stringify({
-          ...payload,
+          ...auditPayload,
           rejection:
             'network_mismatch'
         }),
@@ -1667,7 +2047,7 @@ async function processIpn(
       `,
       [
         JSON.stringify({
-          ...payload,
+          ...auditPayload,
           rejection:
             'address_mismatch'
         }),
@@ -1837,7 +2217,7 @@ async function processIpn(
         [
           txHash,
           actualPaid,
-          JSON.stringify(payload),
+          JSON.stringify(auditPayload),
           locked.id
         ]
       );
@@ -1882,7 +2262,7 @@ async function processIpn(
           internalStatus,
           txHash,
           actualPaid,
-          JSON.stringify(payload),
+          JSON.stringify(auditPayload),
           locked.id
         ]
       );
@@ -1959,7 +2339,7 @@ async function processIpn(
           txHash,
           credit,
           credit,
-          JSON.stringify(payload),
+          JSON.stringify(auditPayload),
           locked.id
         ]
       );
