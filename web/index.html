@@ -309,6 +309,12 @@
     Do not put JWT_SECRET or NOWPAYMENTS secrets here.
   */
 
+  /*
+    The frontend is served by the same backend (Web Service),
+    so API calls are same-origin. No separate domain, no CORS
+    configuration needed.
+  */
+
   const API = '';
 
   function getJwt() {
