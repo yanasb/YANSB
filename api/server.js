@@ -7,6 +7,18 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import QRCode from 'qrcode';
 import pg from 'pg';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(
+  fileURLToPath(import.meta.url)
+);
+
+const WEB_DIR = path.join(
+  __dirname,
+  '..',
+  'web'
+);
 
 const { Pool } = pg;
 
@@ -18,6 +30,15 @@ app.use(
   helmet({
     crossOriginResourcePolicy: {
       policy: 'cross-origin'
+    },
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", "'unsafe-inline'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'", 'data:'],
+        connectSrc: ["'self'"]
+      }
     }
   })
 );
@@ -28,6 +49,23 @@ app.use(
     type: ['application/json', 'application/*+json']
   })
 );
+
+/*
+  Serve the frontend (web/index.html) from this same
+  Web Service, on the same domain as the API.
+
+  This avoids needing a second Render service and any
+  CORS configuration between two different domains.
+*/
+app.use(
+  express.static(WEB_DIR)
+);
+
+app.get('/', (req, res) => {
+  res.sendFile(
+    path.join(WEB_DIR, 'index.html')
+  );
+});
 
 /* =========================================================
    CONFIG
