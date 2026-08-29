@@ -28,6 +28,8 @@ Transaction record
 ↓
 Deposit history
 
+`api/server.js` نفسه هو يلي يعرض ملف `web/index.html` (عبر `express.static` على مجلد `web/` المجاور)، فالواجهة والباك-إند على نفس النطاق (Domain) الواحد. لا حاجة لخدمة Render منفصلة للواجهة، ولا لأي إعداد CORS بينهما.
+
 ## Authentication
 
 النظام يوفر تسجيل دخول ومستخدمين مبنيًا داخل نفس `api/server.js` (بدون أي اعتماد خارجي):
