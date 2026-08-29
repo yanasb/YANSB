@@ -31,15 +31,14 @@ app.use(
     crossOriginResourcePolicy: {
       policy: 'cross-origin'
     },
-    contentSecurityPolicy: {
-      directives: {
-        defaultSrc: ["'self'"],
-        scriptSrc: ["'self'", "'unsafe-inline'"],
-        styleSrc: ["'self'", "'unsafe-inline'"],
-        imgSrc: ["'self'", 'data:'],
-        connectSrc: ["'self'"]
-      }
-    }
+    /*
+      This service also serves web/index.html, which uses
+      inline <script> and <style> tags and inline onclick
+      handlers. Helmet's default Content-Security-Policy
+      blocks all of that silently (no visible error, buttons
+      simply do nothing), so it is disabled here.
+    */
+    contentSecurityPolicy: false
   })
 );
 
